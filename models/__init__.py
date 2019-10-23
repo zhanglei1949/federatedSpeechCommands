@@ -6,7 +6,7 @@ from .densenet import *
 from .resnext import *
 
 available_models = [
-    'vgg19_bn',
+    'vgg19_bn', 'vgg19', 'vgg11',
     'resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152',
     'wideresnet28_10', 'wideresnet28_10D', 'wideresnet52_10',
     'resnext29_8_64',
@@ -41,6 +41,8 @@ def create_model(model_name, num_classes, in_channels):
         model = DenseNet(depth=250, growthRate=24, compressionRate=2, num_classes=num_classes, in_channels=in_channels)
     elif model_name == "densenet_bc_190_40":
         model = DenseNet(depth=190, growthRate=40, compressionRate=2, num_classes=num_classes, in_channels=in_channels)
-    else:
+    elif model_name == "vgg19_bn":
         model = vgg19_bn(num_classes=num_classes, in_channels=in_channels)
+    else:
+        model = vgg11(num_classes=num_classes, in_channels=in_channels)
     return model
