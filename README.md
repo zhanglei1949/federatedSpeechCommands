@@ -1,6 +1,14 @@
 Convolutional neural networks for [Google speech commands data set](https://research.googleblog.com/2017/08/launching-speech-commands-dataset.html)
 with [PyTorch](http://pytorch.org/).
 
+# With federated Learning
+
+Run `federated_train_speech_commands_gpu.py` for simulating federated training with multiple clients, for example
+```
+python federated_train_speech_commands.py --model=vgg11 --optim=sgd --lr-scheduler=plateau --learning-rate=0.01 --lr-scheduler-patience=5 --max-epochs=1 --batch-size=156 --clients=2 --matrix-size=500
+```
+
+
 # General
 We, [xuyuan](https://github.com/xuyuan) and [tugstugi](https://github.com/tugstugi), have participated
 in the Kaggle competition [TensorFlow Speech Recognition Challenge](https://www.kaggle.com/c/tensorflow-speech-recognition-challenge)
