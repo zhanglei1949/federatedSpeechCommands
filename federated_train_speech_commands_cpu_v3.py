@@ -22,7 +22,7 @@ import models
 from datasets import *
 from transforms import *
 from mixup import *
-from federated_utils import getLenOfGradientVectorCuda, transListOfArraysToArraysCuda, getShapeListCuda,transCudaArrayWithShapeList
+from federated_utils_cpu import Federated
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument("--clients", type = int, default = 5, help= 'number of clients')
@@ -137,7 +137,7 @@ def main():
     print("training %s for Google speech commands..." % args.model)
     since = time.time()
     #grad_client_list = [[]] * args.clients
-
+    federated = Federated(args.clients, args.matrix_size)
     for epoch in range(start_epoch, args.max_epochs):
         print("epoch %3d with lr=%.02e" % (epoch, get_lr()))
         phase = 'train'
@@ -149,26 +149,11 @@ def main():
         it = 0
         correct = 0
         total = 0
-        A = 0
-        #federated
-        n = 0 # the length of squeezed gradient vector
-        shape_list = []
-        num_paddings = 0
-        A_inv = 0
-        S_i = 0
-        S_j = 0
-        u = 0
-        sigma = 0
-        vh = 0
-        ns = 0
-        global_grad_sum  = 0#= torch.zeros(84454500).cuda()
-        global_grad_sum_actual = 0 #= torch.zeros(28151052).cuda()
 
         #compute for each client
         current_client = 0
         pbar = tqdm(train_dataloader, unit="audios", unit_scale=train_dataloader.batch_size, disable=True)
         for batch in pbar:
-
             inputs = batch['input']
             inputs = torch.unsqueeze(inputs, 1)
             targets = batch['target']
@@ -189,124 +174,36 @@ def main():
                 loss = criterion(outputs, targets)
             optimizer.zero_grad()
             loss.backward()
-            #generate gradient list
             current_client_grad = []
             for name, param in model.named_parameters():
                 if param.requires_grad:
                     #print(name, param.grad.shape, param.grad.type())#, param.grad)
                     current_client_grad.append(param.grad)
-            #break
-            #print(len(current_client_grad), current_client_grad[0].shape, current_client_grad[-1].shape)
             #randomize the gradient, if in a new batch, generate the randomization matrix
             if (current_client == 0):
-                # Generate matrix A
-                # 1. first obtain n(the total length of gradient vector) (if n == 0, get it, or pass)
-                
-                n = getLenOfGradientVectorCuda(current_client_grad)
-                global_grad_sum = torch.zeros(3 * math.ceil(float(n)/args.matrix_size) * args.matrix_size).cuda()
-                global_grad_sum_actual = torch.zeros(n).cuda()
-                shape_list = getShapeListCuda(current_client_grad)
-                print("gradient vector of length", n)
-                # 2. randomize a full rank matrix A, the elements are evenly distributed
-                #A = np.random.randint(0, 10000,size = (n, n)) 
-                # Memory is not enough to create such a large matrix : CURRENT SOLUTION use a small size matrix and 
-                # iterate over the vector
-                A = torch.randint(0, 10000, (args.matrix_size, args.matrix_size)).float().cuda()
-                print("generating randomization matrix")
-                A_inv = A.inverse()
-                # two index set
-                S_i = random.sample(range(0, 3*args.matrix_size), args.matrix_size)
-                S_i.sort()
-                S_j = random.sample(range(0, 2*args.matrix_size), args.matrix_size)
-                S_j.sort()
-                # extend to B
-                #B = torch.zeros(args.matrix_size, 3*args.matrix_size).cuda()
-                B = torch.zeros(args.matrix_size, 3*args.matrix_size).cuda()
-                for i in range(0, args.matrix_size):
-                        B[:, S_i[i]:S_i[i]+1] = A[:, i:i+1]
-                C = (10000 * torch.randn(2 * args.matrix_size, 3*args.matrix_size)).cuda()
-                for i in range(0, args.matrix_size):
-                    C[S_j[i] : S_j[i] + 1, :] = B[i:i+1 , :]
-                #Does cuda speed up our calculation
-                #C = C.cuda()
-                # SVD
-                u, s, vh = torch.svd(C, some=False)
-                #print('u', u.shape, 's', s.shape, 'vh', vh.shape)
-                # recontruct sigma
-                sigma = torch.zeros(C.shape[0], C.shape[1]).cuda()
-                #print(C.shape[0], C.shape[1])
-                sigma[:min(C.shape[0],C.shape[1]), :min(C.shape[0],C.shape[1])] = s.diag()
-                #assert(torch.equal(torch.mm(u, torch.mm(sigma, vh)), C))
-                # C = torch.mm(torch.mm(u, sigma), vh.t())
-                
-                # linear independent group(null space)
-                ns = null_space(C.cpu()) # (3000, 1000) we use the first args.
-                ns = torch.from_numpy(ns).cuda()
-                #print('ns', ns.shape)
-            # do the randomization, obtain a new gradient vector for gradient_client_list[current_client]
-            flatterned_grad = transListOfArraysToArraysCuda(current_client_grad, n)
-            global_grad_sum_actual += flatterned_grad
-            ###TODO: 1. need padding, 2. how to recover
-            # random numbers
-            r = (10000*torch.randn(args.matrix_size, 1)).cuda()
-            r_new =  torch.zeros(3 * args.matrix_size, 1).cuda()
-            for i in range(args.matrix_size):
-                r_new += r[i] * ns[:,i:i+1]
-            num_paddings = math.ceil(float(n)/args.matrix_size) * args.matrix_size  - n
-            #print('flatterned', n, 'need padding', num_paddings) #np.array
-            # extent to 2n
-            flatterned_grad_extended = torch.zeros(n + num_paddings).cuda()
-            flatterned_grad_extended[:n] = flatterned_grad
-            #print(flatterned_grad_extended[:20])
-            current_client_grad_after_random = torch.zeros(3*flatterned_grad_extended.shape[0]).cuda()
-            new_grad = (10000 * torch.randn(3 * args.matrix_size, 1)).cuda()
-            for i in range(0, flatterned_grad_extended.shape[0], args.matrix_size):
-                if (i/args.matrix_size % 5000 == 0):
-                    print(i/args.matrix_size, flatterned_grad_extended.shape[0] / args.matrix_size)
-                for j in range(args.matrix_size):
-                    new_grad[S_i[j]] = flatterned_grad_extended[i + j]
-                
-                # compute the randomize gradient
-                randomized_gradient = torch.mm(vh.t(), new_grad + r_new)
-                #print("randomized gradient", randomized_gradient.shape)
-                current_client_grad_after_random[3*i : 3*i + 3*args.matrix_size] = torch.squeeze(randomized_gradient)
-            #print('after randomization', current_client_grad_after_random.shape)
-            # transform the flatterned vector to matrix for model update
+                federated.init(current_client_grad)
+            print("client ", current_client, " start")
+            start_time = time.time()
+            federated.work_for_client(current_client, current_client_grad)
+            print("client", current_client, " complete")
+            end_time = time.time()
+            print("work for client ", current_client, " cost ", end_time - start_time)
             if (current_client == args.clients - 1):
-                print("client", current_client)
-                global_grad_sum += current_client_grad_after_random
-                # collect all the randomized gradient, cacluate the sum, and send to all clients
-                # each client eliminate the randomness, and update the parameters according to the gradients
-                # remove randomness
-                res = torch.zeros(int(global_grad_sum.shape[0]/3)).cuda()
-                alpha = torch.zeros(args.matrix_size, 1).cuda()
-                for i in range(0, global_grad_sum.shape[0] , 3 * args.matrix_size):
-                    tmp = torch.mm(torch.mm(u, sigma), global_grad_sum[i : i + 3*args.matrix_size].view(-1, 1))
-                    for j in range(args.matrix_size): 
-                        alpha[j] = tmp[S_j[j]]
-                    res[int(i/3) : int(i/3) + args.matrix_size] = (torch.mm(A_inv, alpha)).squeeze()
-                
-                # set the gradient manually and update
-                recovered_grad_in_cuda = transCudaArrayWithShapeList(res, shape_list)
-                # check whether the same 
-                print('dist', torch.dist(res[:n], global_grad_sum_actual))
+                recover_start = time.time()
+                recovered_grad = federated.recoverGradient()
                 ind = 0
+                recover_end = time.time()
+                print("recover gradient cost ", recover_end - recover_start)
                 #print(recovered_grad_in_cuda, recovered_grad_in_cuda[0].shape, r)
                 for name, param in model.named_parameters():
                     if param.requires_grad:
-                        #print(recovered_grad_in_cuda[ind].shape, recovered_grad_in_cuda[ind].type())
-                        #print(recovered_grad_in_cuda[ind][:10])
-                        param.grad = recovered_grad_in_cuda[ind]
+                        param.grad = recovered_grad[ind]
                         ind+=1
-                assert(ind == len(recovered_grad_in_cuda))
+                assert(ind == len(recovered_grad))
                 optimizer.step()
                 print("all clients finished")
                 current_client = 0
-                global_grad_sum.fill_(0)
-                global_grad_sum_actual.fill_(0)
             else :
-                print("client", current_client)
-                global_grad_sum += current_client_grad_after_random
                 current_client += 1
 
             # only update the parameters when current_client == args.clients - 1
@@ -330,13 +227,25 @@ def main():
                 'loss': "%.05f" % (running_loss / it),
                 'acc': "%.02f%%" % (100*float(correct)/total)
             })
-            print("loss\t ", running_loss / it, "\t acc \t", 100*float(correct)/total)
+            
+            print("[batch]\t", it, " [loss]\t ", running_loss / it, " [acc] \t", 100 * float(correct)/total)
+            print('------------------------------------------------------------------')
             #break
 
         accuracy = float(correct)/total
         epoch_loss = running_loss / it
         writer.add_scalar('%s/accuracy' % phase, 100*accuracy, epoch)
         writer.add_scalar('%s/epoch_loss' % phase, epoch_loss, epoch)
-
+        checkpoint = {
+            'epoch': epoch,
+            'step': global_step,
+            'state_dict': model.state_dict(),
+            'loss': epoch_loss,
+            'accuracy': accuracy,
+            'optimizer' : optimizer.state_dict(),
+        }
+        torch.save(checkpoint, 'checkpoints/federated-best-loss-speech-commands-checkpoint-%s.pth' % full_name)
+        torch.save(model, '%d-%s-federated-best-loss.pth' % (start_timestamp, full_name))
+        del checkpoint
 if __name__ == '__main__':
     main()

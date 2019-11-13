@@ -4,6 +4,7 @@ from .dpn import *
 from .resnet import *
 from .densenet import *
 from .resnext import *
+from .conv import *
 
 available_models = [
     'vgg19_bn', 'vgg19', 'vgg11',
@@ -11,13 +12,16 @@ available_models = [
     'wideresnet28_10', 'wideresnet28_10D', 'wideresnet52_10',
     'resnext29_8_64',
     'dpn92',
-    'densenet_bc_100_12', 'densenet_bc_250_24', 'densenet_bc_190_40'
+    'densenet_bc_100_12', 'densenet_bc_250_24', 'densenet_bc_190_40',
+    'conv'
 ]
 
 def create_model(model_name, num_classes, in_channels):
-    if model_name == "resnet18":
+    if (model_name == "conv"):
+        model = conv(num_classes=num_classes, in_channels=in_channels)
+    elif model_name == "resnet18":
         model = resnet18(num_classes=num_classes, in_channels=in_channels)
-    if model_name == "resnet34":
+    elif model_name == "resnet34":
         model = resnet34(num_classes=num_classes, in_channels=in_channels)
     elif model_name == "resnet50":
         model = resnet50(num_classes=num_classes, in_channels=in_channels)
