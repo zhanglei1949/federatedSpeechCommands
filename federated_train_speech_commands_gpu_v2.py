@@ -195,6 +195,7 @@ def main():
                 #print(recovered_grad_in_cuda, recovered_grad_in_cuda[0].shape, r)
                 for name, param in model.named_parameters():
                     if param.requires_grad:
+                        print(param.grad, recovered_grad[ind])
                         param.grad = recovered_grad[ind]
                         ind+=1
                 assert(ind == len(recovered_grad))

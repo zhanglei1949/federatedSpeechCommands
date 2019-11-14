@@ -98,7 +98,7 @@ class Federated:
         self.num_threads = 10
     def init(self, gradient):
         self.len_gradient, self.shape_list = get_shape_and_length_gradient_cuda(gradient)
-        self.len_gradient_after_padding = 3 * math.ceil(float(self.len_gradient)/self.matrix_size) * self.matrix_size
+        self.len_gradient_after_padding = math.ceil(float(self.len_gradient)/self.matrix_size) * self.matrix_size
         #self.len_gradient_after_padding = math.ceil(float(self.len_gradient)/self.matrix_size) * self.matrix_size
         print(self.len_gradient_after_padding)
         self.ori_gradient_sum = torch.zeros(self.len_gradient).cuda()
@@ -155,8 +155,7 @@ class Federated:
         flatterned_grad_extended_final = (self.MAX * torch.rand(3 * self.len_gradient_after_padding, 1)).float().cuda()
         ###TODO: multi threading
         for i in range(0, self.len_gradient_after_padding, self.matrix_size):
-            for j in range(0, self.matrix_size): 
-                flatterned_grad_extended_final[3 * i : 3*(i + self.matrix_size), :] = torch.mm(self.vh_t, flatterned_grad_extended_after_random[3 * i : 3*(i + self.matrix_size), :] + kernel_space)
+            flatterned_grad_extended_final[3 * i : 3*(i + self.matrix_size), :] = torch.mm(self.vh_t, flatterned_grad_extended_after_random[3 * i : 3*(i + self.matrix_size), :] + kernel_space)
 
         self.random_gradient_sum += flatterned_grad_extended_final[:, 0]
         time3 = time.time()
