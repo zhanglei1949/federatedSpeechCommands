@@ -1,4 +1,4 @@
-import torch, time, threading
+import torch, time
 import numpy as np
 import math
 import random
@@ -154,25 +154,9 @@ class Federated:
         print("client ", client_no, " randomization complete")
         flatterned_grad_extended_final = (self.MAX * torch.rand(3 * self.len_gradient_after_padding, 1)).float().cuda()
         ###TODO: multi threading
-        def matrixProd(thread_id):
-            part_num = self.len_gradient_after_padding / 10
-            print(threading.current_thread().name, thread_id * part_num, (thread_id + 1) * part_num)
-            
-            for i in range(int(thread_id * part_num), int((thread_id + 1) * part_num), self.matrix_size):
-                for j in range(0, self.matrix_size): 
-                    flatterned_grad_extended_final[3 * i : 3*(i + self.matrix_size), :] \
-                    = torch.mm(self.vh_t, flatterned_grad_extended_after_random[3 * i : 3*(i + self.matrix_size), :] + kernel_space)
-            print(threading.current_thread().name, " finish")
-        threads = []
-        for _i in range(self.num_threads):
-            t = threading.Thread(target = matrixProd, args = (_i,))
-            threads.append(t)
-            t.start()
-        for thread in threads:
-            thread.join()
-        #thread.join()
-        
-        
+        for i in range(0, self.len_gradient_after_padding, self.matrix_size):
+            for j in range(0, self.matrix_size): 
+                flatterned_grad_extended_final[3 * i : 3*(i + self.matrix_size), :] = torch.mm(self.vh_t, flatterned_grad_extended_after_random[3 * i : 3*(i + self.matrix_size), :] + kernel_space)
 
         self.random_gradient_sum += flatterned_grad_extended_final[:, 0]
         time3 = time.time()
