@@ -26,6 +26,7 @@ from federated_utils_cpu import Federated
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument("--clients", type = int, default = 5, help= 'number of clients')
+parser.add_argument("--num-threads", type = int, default = 10, help= 'number of threads')
 parser.add_argument("--matrix-size", type = int, default = 1000, help= 'size of randomization matrix')
 parser.add_argument("--train-dataset", type=str, default='datasets/speech_commands/train', help='path of train dataset')
 parser.add_argument("--valid-dataset", type=str, default='datasets/speech_commands/valid', help='path of validation dataset')
@@ -137,7 +138,7 @@ def main():
     print("training %s for Google speech commands..." % args.model)
     since = time.time()
     #grad_client_list = [[]] * args.clients
-    federated = Federated(args.clients, args.matrix_size)
+    federated = Federated(args.clients, args.matrix_size, args.num_threads)
     for epoch in range(start_epoch, args.max_epochs):
         print("epoch %3d with lr=%.02e" % (epoch, get_lr()))
         phase = 'train'
@@ -152,7 +153,7 @@ def main():
 
         #compute for each client
         current_client = 0
-        pbar = tqdm(train_dataloader, unit="audios", unit_scale=train_dataloader.batch_size, disable=True)
+        pbar = tqdm(train_dataloader, unit="audios", unit_scale=train_dataloader.batch_size, disable=False)
         for batch in pbar:
             inputs = batch['input']
             inputs = torch.unsqueeze(inputs, 1)
@@ -182,18 +183,18 @@ def main():
             #randomize the gradient, if in a new batch, generate the randomization matrix
             if (current_client == 0):
                 federated.init(current_client_grad)
-            print("client ", current_client, " start")
+            #print("client ", current_client, " start")
             start_time = time.time()
             federated.work_for_client(current_client, current_client_grad)
-            print("client", current_client, " complete")
+            #print("client", current_client, " complete")
             end_time = time.time()
-            print("work for client ", current_client, " cost ", end_time - start_time)
+            #print("work for client ", current_client, " cost ", end_time - start_time)
             if (current_client == args.clients - 1):
                 recover_start = time.time()
                 recovered_grad = federated.recoverGradient()
                 ind = 0
                 recover_end = time.time()
-                print("recover gradient cost ", recover_end - recover_start)
+                #print("recover gradient cost ", recover_end - recover_start)
                 #print(recovered_grad_in_cuda, recovered_grad_in_cuda[0].shape, r)
                 for name, param in model.named_parameters():
                     if param.requires_grad:
@@ -201,7 +202,7 @@ def main():
                         ind+=1
                 assert(ind == len(recovered_grad))
                 optimizer.step()
-                print("all clients finished")
+                #print("all clients finished")
                 current_client = 0
             else :
                 current_client += 1
@@ -228,24 +229,26 @@ def main():
                 'acc': "%.02f%%" % (100*float(correct)/total)
             })
             
-            print("[batch]\t", it, " [loss]\t ", running_loss / it, " [acc] \t", 100 * float(correct)/total)
-            print('------------------------------------------------------------------')
+            #print("[batch]\t", it, " [loss]\t ", running_loss / it, " [acc] \t", 100 * float(correct)/total)
+            #print('------------------------------------------------------------------')
             #break
 
         accuracy = float(correct)/total
         epoch_loss = running_loss / it
         writer.add_scalar('%s/accuracy' % phase, 100*accuracy, epoch)
         writer.add_scalar('%s/epoch_loss' % phase, epoch_loss, epoch)
-        checkpoint = {
-            'epoch': epoch,
-            'step': global_step,
-            'state_dict': model.state_dict(),
-            'loss': epoch_loss,
-            'accuracy': accuracy,
-            'optimizer' : optimizer.state_dict(),
-        }
-        torch.save(checkpoint, 'checkpoints/federated-best-loss-speech-commands-checkpoint-%s.pth' % full_name)
-        torch.save(model, '%d-%s-federated-best-loss.pth' % (start_timestamp, full_name))
-        del checkpoint
+        if (accuracy > best_accuracy):
+            best_accuracy = accuracy
+            checkpoint = {
+                'epoch': epoch,
+                'step': global_step,
+                'state_dict': model.state_dict(),
+                'loss': epoch_loss,
+                'accuracy': accuracy,
+                'optimizer' : optimizer.state_dict(),
+            }
+            torch.save(checkpoint, 'checkpoints/federated-best-loss-speech-commands-checkpoint-%s.pth' % full_name)
+            torch.save(model, '%d-%s-federated-best-loss.pth' % (start_timestamp, full_name))
+            del checkpoint
 if __name__ == '__main__':
     main()

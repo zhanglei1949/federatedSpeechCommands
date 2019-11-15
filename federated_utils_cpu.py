@@ -81,11 +81,11 @@ def trans2numpyArrayWithShapeList(grad, shape_list):
     return res
 
 class Federated:
-    def __init__(self, num_clients, matrix_size):
+    def __init__(self, num_clients, matrix_size, num_threads):
         # utilize a sample gradient vector 
         self.num_clients = num_clients
         self.matrix_size = matrix_size
-        self.num_threads = 10
+        self.num_threads = num_threads
         self.MAX = 0.001
         self.S_i = random.sample(range(0, 3 * self.matrix_size), self.matrix_size)
         self.S_i.sort()
@@ -115,8 +115,8 @@ class Federated:
         # null space
         self.u_sigma = np.dot(self.u, self.sigma)
         self.ns = null_space(self.C) # (3000, 1000) we use the first args.
-        print("Initialization complete", self.ns.shape, "length after padding ", self.len_gradient_after_padding)
-        print("appended ", self.len_gradient_after_padding - self.len_gradient)
+        #print("Initialization complete", self.ns.shape, "length after padding ", self.len_gradient_after_padding)
+        #print("appended ", self.len_gradient_after_padding - self.len_gradient)
     def work_for_client(self, client_no, gradient):
         time1 = time.time()
         assert(client_no < self.num_clients)
@@ -139,7 +139,7 @@ class Federated:
         
         # compute result
         time2 = time.time()
-        print("client ", client_no, " randomization complete")
+        #print("client ", client_no, " randomization complete")
         flatterned_grad_extended_final = self.MAX * np.random.rand(3 * self.len_gradient_after_padding, 1)
         ##TODO: optimize matrix calculation
         '''
@@ -149,12 +149,12 @@ class Federated:
         '''
         def matrixProd(thread_id):
             part_num = self.len_gradient_after_padding / self.num_threads
-            print(thread_id, thread_id * part_num, (thread_id + 1) * part_num)
+            #print(thread_id, thread_id * part_num, (thread_id + 1) * part_num)
             
             for i in range(int(thread_id * part_num), int((thread_id + 1) * part_num), self.matrix_size):
                 flatterned_grad_extended_final[3 * i : 3*(i + self.matrix_size), :] \
                     = np.dot(self.vh, flatterned_grad_extended_after_random[3 * i : 3*(i + self.matrix_size), :] + kernel_space)
-            print(thread_id, " finish")
+            #print(thread_id, " finish")
         threads = []
         for _i in range(self.num_threads):
             t = threading.Thread(target = matrixProd, args = (_i,))
@@ -164,8 +164,8 @@ class Federated:
             thread.join()
         self.random_gradient_sum += flatterned_grad_extended_final[:, 0]
         time3 = time.time()
-        print("client ",  client_no, " masking complete",)
-        print("time for randomization ", time2 - time1, "time for masking", time3 - time2)
+        #print("client ",  client_no, " masking complete",)
+        #print("time for randomization ", time2 - time1, "time for masking", time3 - time2)
     def recoverGradient(self):
         time1 = time.time()
         res = np.zeros((self.len_gradient_after_padding, 1))
@@ -179,8 +179,8 @@ class Federated:
         # set the gradient manually and update
         recovered_grad_in_list = trans2numpyArrayWithShapeList(res, self.shape_list)
         time2 = time.time()
-        print('[dist]\t', np.sum(np.abs(res[:self.len_gradient, 0] - self.ori_gradient_sum)))
-        print('ori ', self.ori_gradient_sum[:10])
-        print("rec ", res[:10])
-        print("Recover gradient cost ", time2 - time1)
+        #print('[dist]\t', np.sum(np.abs(res[:self.len_gradient, 0] - self.ori_gradient_sum)))
+        #print('ori ', self.ori_gradient_sum[:10])
+        #print("rec ", res[:10])
+        #print("Recover gradient cost ", time2 - time1)
         return recovered_grad_in_list
