@@ -22,7 +22,7 @@ import models
 from datasets import *
 from transforms import *
 from mixup import *
-from federated_utils_gpu import Federated
+from federated_utils_cpu_v2 import Federated
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument("--clients", type = int, default = 5, help= 'number of clients')
@@ -93,7 +93,6 @@ def main():
         full_name = '%s_%s' % (full_name, args.comment)
 
     model = models.create_model(model_name=args.model, num_classes=len(CLASSES), in_channels=1)
-
     if use_gpu:
         model = torch.nn.DataParallel(model).cuda()
 
@@ -138,12 +137,11 @@ def main():
     print("training %s for Google speech commands..." % args.model)
     since = time.time()
     #grad_client_list = [[]] * args.clients
-    federated = Federated(args.clients, args.matrix_size,args.num_threads)
+    federated = Federated(args.clients, args.matrix_size, args.num_threads)
     for epoch in range(start_epoch, args.max_epochs):
         print("epoch %3d with lr=%.02e" % (epoch, get_lr()))
         phase = 'train'
         writer.add_scalar('%s/learning_rate' % phase,  get_lr(), epoch)
-
         model.train()  # Set model to training mode
 
         running_loss = 0.0
@@ -153,7 +151,12 @@ def main():
 
         #compute for each client
         current_client = 0
-        pbar = tqdm(train_dataloader, unit="audios", unit_scale=train_dataloader.batch_size, disable=True)
+        pbar = tqdm(train_dataloader, unit="audios", unit_scale=train_dataloader.batch_size, disable=False)
+        # for i in range(0, train_dataloader.__len__, self.batch_size):
+        #     pbar.
+        #print(pbar.total, len(train_dataloader), len(train_dataset), train_dataloader.batch_size)
+        #num_batches = len(pbar.total)
+
         for batch in pbar:
             inputs = batch['input']
             inputs = torch.unsqueeze(inputs, 1)
@@ -175,7 +178,6 @@ def main():
                 loss = criterion(outputs, targets)
             optimizer.zero_grad()
             loss.backward()
-            #generate gradient list
             current_client_grad = torch.zeros(1,1).cuda()
             shape_list = []
             for name, param in model.named_parameters():
@@ -186,27 +188,29 @@ def main():
                     current_client_grad = torch.cat((current_client_grad, param.grad.view(-1,1)), 0)
             #break
             current_client_grad = current_client_grad[1:,:].view(-1,)
-            print(current_client_grad.shape)
-            #print("ori ", current_client_grad[0].view(-1, 1)[-10:])
-            #print(len(current_client_grad), current_client_grad[0].shape, current_client_grad[-1].shape)
-            #randomize the gradient, if in a new batch, generate the randomization matrix
+            #print(current_client_grad.shape)
             if (current_client == 0):
-                federated.init(current_client_grad, shape_list)
-            print("client ", current_client, " start")
+                federated.init(current_client_grad,shape_list)
+            #print("client ", current_client, " start")
+            start_time = time.time()
             federated.work_for_client(current_client, current_client_grad)
-            print("client", current_client, " complete")
+            #print("client", current_client, " complete")
+            end_time = time.time()
+            #print("work for client ", current_client, " cost ", end_time - start_time)
             if (current_client == args.clients - 1):
+                recover_start = time.time()
                 recovered_grad = federated.recoverGradient()
                 ind = 0
+                recover_end = time.time()
+                #print("recover gradient cost ", recover_end - recover_start)
                 #print(recovered_grad_in_cuda, recovered_grad_in_cuda[0].shape, r)
                 for name, param in model.named_parameters():
                     if param.requires_grad:
-                        print(param.grad, recovered_grad[ind])
                         param.grad = recovered_grad[ind]
                         ind+=1
                 assert(ind == len(recovered_grad))
                 optimizer.step()
-                print("all clients finished")
+                #print("all clients finished")
                 current_client = 0
             else :
                 current_client += 1
@@ -233,8 +237,8 @@ def main():
                 'acc': "%.02f%%" % (100*float(correct)/total)
             })
             
-            print("[batch]\t", it, " [loss]\t ", running_loss / it, " [acc] \t", 100 * float(correct)/total)
-            print('------------------------------------------------------------------')
+            #print("[batch]\t", it, " [loss]\t ", running_loss / it, " [acc] \t", 100 * float(correct)/total)
+            #print('------------------------------------------------------------------')
             #break
 
         accuracy = float(correct)/total
@@ -254,6 +258,5 @@ def main():
             torch.save(checkpoint, 'checkpoints/federated-best-loss-speech-commands-checkpoint-%s.pth' % full_name)
             torch.save(model, '%d-%s-federated-best-loss.pth' % (start_timestamp, full_name))
             del checkpoint
-
 if __name__ == '__main__':
     main()
