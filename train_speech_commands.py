@@ -167,7 +167,7 @@ def train(epoch):
         # statistics
         it += 1
         global_step += 1
-        running_loss += loss.data[0]
+        running_loss += loss.data.item()
         pred = outputs.data.max(1, keepdim=True)[1]
         if args.mixup:
             targets = batch['target']
@@ -175,15 +175,15 @@ def train(epoch):
         correct += pred.eq(targets.data.view_as(pred)).sum()
         total += targets.size(0)
 
-        writer.add_scalar('%s/loss' % phase, loss.data[0], global_step)
+        writer.add_scalar('%s/loss' % phase, loss.data.item(), global_step)
 
         # update the progress bar
         pbar.set_postfix({
             'loss': "%.05f" % (running_loss / it),
-            'acc': "%.02f%%" % (100*correct/total)
+            'acc': "%.02f%%" % (100*float(correct)/total)
         })
 
-    accuracy = correct/total
+    accuracy = float(correct)/total
     epoch_loss = running_loss / it
     writer.add_scalar('%s/accuracy' % phase, 100*accuracy, epoch)
     writer.add_scalar('%s/epoch_loss' % phase, epoch_loss, epoch)
@@ -219,20 +219,20 @@ def valid(epoch):
         # statistics
         it += 1
         global_step += 1
-        running_loss += loss.data[0]
+        running_loss += loss.data.item()
         pred = outputs.data.max(1, keepdim=True)[1]
         correct += pred.eq(targets.data.view_as(pred)).sum()
         total += targets.size(0)
 
-        writer.add_scalar('%s/loss' % phase, loss.data[0], global_step)
+        writer.add_scalar('%s/loss' % phase, loss.data.item(), global_step)
 
         # update the progress bar
         pbar.set_postfix({
             'loss': "%.05f" % (running_loss / it),
-            'acc': "%.02f%%" % (100*correct/total)
+            'acc': "%.02f%%" % (100*float(correct)/total)
         })
 
-    accuracy = correct/total
+    accuracy = float(correct)/total
     epoch_loss = running_loss / it
     writer.add_scalar('%s/accuracy' % phase, 100*accuracy, epoch)
     writer.add_scalar('%s/epoch_loss' % phase, epoch_loss, epoch)

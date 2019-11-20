@@ -4,6 +4,7 @@
 # 4. considering using gpu for acceleration
 import argparse
 import time
+from threading import Thread
 import scipy, math
 from scipy.linalg import null_space
 from tqdm import *
@@ -22,7 +23,7 @@ import models
 from datasets import *
 from transforms import *
 from mixup import *
-from federated_utils_cpu_v2 import Federated
+from federated_utils_refactor import Federated_CPU, Federated_GPU
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument("--clients", type = int, default = 5, help= 'number of clients')
@@ -75,6 +76,18 @@ def build_dataset(n_mels = n_mels, train_dataset = args.train_dataset, valid_dat
                                          valid_feature_transform]))
     return train_dataset, valid_dataset
 
+class MyThread:
+    def __init__(self, func, args):
+        super(MyThread, self).__init__()
+        self.func = func
+        self.args = args
+    def run(self):
+        self.result = self.func(*self.args)
+    def get_results(self):
+        try:
+            return self.result
+        except Exception:
+            return None
 def main():
     # 1. load dataset, train and valid
     train_dataset, valid_dataset = build_dataset(n_mels = n_mels, train_dataset = args.train_dataset, valid_dataset = args.valid_dataset, background_noise = args.background_noise)
@@ -137,7 +150,7 @@ def main():
     print("training %s for Google speech commands..." % args.model)
     since = time.time()
     #grad_client_list = [[]] * args.clients
-    federated = Federated(args.clients, args.matrix_size, args.num_threads)
+    federated = Federated_GPU(args.clients, args.matrix_size, args.num_threads)
     for epoch in range(start_epoch, args.max_epochs):
         print("epoch %3d with lr=%.02e" % (epoch, get_lr()))
         phase = 'train'
@@ -152,13 +165,10 @@ def main():
         #compute for each client
         current_client = 0
         pbar = tqdm(train_dataloader, unit="audios", unit_scale=train_dataloader.batch_size, disable=False)
-        # for i in range(0, train_dataloader.__len__, self.batch_size):
-        #     pbar.
-        #print(pbar.total, len(train_dataloader), len(train_dataset), train_dataloader.batch_size)
-        #num_batches = len(pbar.total)
+        #print(pbar.total, len(train_dataloader), len(train_dataset), train_dataloader.batch_size, len(train_dataset)/train_dataloader.batch_size)
+        pbar_iter = iter(pbar)
         
-
-        for batch in pbar:
+        def getGradient(batch):
             inputs = batch['input']
             inputs = torch.unsqueeze(inputs, 1)
             targets = batch['target']
@@ -189,6 +199,24 @@ def main():
                     current_client_grad = torch.cat((current_client_grad, param.grad.view(-1,1)), 0)
             #break
             current_client_grad = current_client_grad[1:,:].view(-1,)
+            return current_client_grad
+        for i in range(pbar.total / args.clients):
+            threads = []
+            for j in range(args.clients):
+                t = MyThread(getGradient, next(pbar_iter))
+                threads.append(t)
+                t.start()
+            for t in threads:
+                t.join()
+            #First initialzie
+            federated.init(threads[0].get_results())
+            for i,t in enumerate(threads):
+                federated.work_for_client(i,t.get_results())
+
+        
+'''
+        for batch in pbar:
+            
             #print(current_client_grad.shape)
             if (current_client == 0):
                 federated.init(current_client_grad,shape_list)
@@ -259,5 +287,6 @@ def main():
             torch.save(checkpoint, 'checkpoints/federated-best-loss-speech-commands-checkpoint-%s.pth' % full_name)
             torch.save(model, '%d-%s-federated-best-loss.pth' % (start_timestamp, full_name))
             del checkpoint
+'''
 if __name__ == '__main__':
     main()

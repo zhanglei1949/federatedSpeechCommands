@@ -99,12 +99,12 @@ class Federated:
     def init(self, gradient, shape_list):
         self.len_gradient = list(gradient.shape)[0]
         self.shape_list = shape_list
-        print("gradient length", self.len_gradient)
+        #print("gradient length", self.len_gradient)
         #self.len_gradient, self.shape_list = get_shape_and_length_gradient_cuda(gradient)
         self.len_gradient_after_padding = math.ceil(float(self.len_gradient) / (self.matrix_size * self.num_threads)) * self.matrix_size * self.num_threads
         
         self.ori_gradient_sum = torch.zeros(self.len_gradient).cuda()
-        print(self.ori_gradient_sum.shape)
+        #print(self.ori_gradient_sum.shape)
         self.random_gradient_sum = torch.zeros(self.len_gradient_after_padding * 3).cuda()
         
         self.A = self.MAX * torch.rand(self.matrix_size, self.matrix_size).float().cuda()
@@ -125,9 +125,16 @@ class Federated:
         self.u_sigma = torch.mm(self.u, self.sigma)
         ns = null_space(self.C.cpu()) # (3000, 1000) we use the first args.
         self.ns = torch.from_numpy(ns).cuda()
-        print("initialization complete")
+        self.trans_i = torch.zeros(self.matrix_size, 3*self.matrix_size).cuda()
+        self.trans_j = torch.zeros(self.matrix_size, 2*self.matrix_size).cuda()
+        for i,ind in  enumerate(self.S_i):
+            self.trans_i[i][ind] = 1
+        for i,ind in enumerate(self.S_j):
+            self.trans_j[i][ind] = 1
+        #print("initialization complete")
     def work_for_client(self, client_no, gradient):
         assert(client_no < self.num_clients)
+        part_num = self.len_gradient_after_padding / self.num_threads
         time1 = time.time()
         ### TODO time issue
         flatterned_grad = gradient
@@ -141,31 +148,29 @@ class Federated:
         #kernel_space = torch.zeros(self.matrix_size, 1).cuda()
         for i in range(self.matrix_size):
             kernel_space += random_numbers[i] * self.ns[:, i:i+1]
-        print("kernel space complete")
+        #print("kernel space complete")
         flatterned_grad_extended_after_random = (self.MAX * torch.rand(3 * self.len_gradient_after_padding, 1)).float().cuda()
 
-        def randomizing_matrix(thread_id):
-            part_num = self.len_gradient_after_padding / self.num_threads
+        def randomizing_matrix(thread_id, part_num):
             for i in range(int(thread_id * part_num), int((thread_id + 1) * part_num), self.matrix_size):
-                if (thread_id == 0):
-                    print(thread_id, i/self.matrix_size, (int((thread_id + 1) * part_num)/self.matrix_size))
-                for j in range(0, self.matrix_size):
-                    flatterned_grad_extended_after_random[i * 3 + self.S_i[j]] = flatterned_grad_extended[i + j]
+                #if (thread_id == 0):
+                #    print(thread_id, i/self.matrix_size, (int((thread_id + 1) * part_num)/self.matrix_size))
+                flatterned_grad_extended_after_random[i * 3 : 3 * (i + self.matrix_size)] = \
+                    (torch.mm(flatterned_grad_extended[i : i + self.matrix_size].view(1, self.matrix_size), \
+                        self.trans_i)).view(3*self.matrix_size,1)
         threads = []
         for _i in range(self.num_threads):
-            t = threading.Thread(target = randomizing_matrix, args = (_i,))
+            t = threading.Thread(target = randomizing_matrix, args = (_i, part_num))
             threads.append(t)
             t.start()
         for thread in threads:
             thread.join()
         # compute result
         time2 = time.time()
-        print("client ", client_no, " randomization complete ", time2 - time1)
+        #print("client ", client_no, " randomization complete ", time2 - time1)
         flatterned_grad_extended_final = (self.MAX * torch.rand(3 * self.len_gradient_after_padding, 1)).float().cuda()
         ###TODO: multi threading
-        def matrixProd(thread_id):
-            part_num = self.len_gradient_after_padding / self.num_threads
-            #print(thread_id, thread_id * part_num, (thread_id + 1) * part_num)
+        def matrixProd(thread_id, part_num):
             
             for i in range(int(thread_id * part_num), int((thread_id + 1) * part_num), self.matrix_size):
                 flatterned_grad_extended_final[3 * i : 3*(i + self.matrix_size), :] \
@@ -173,7 +178,7 @@ class Federated:
             #print(thread_id, " finish")
         threads = []
         for _i in range(self.num_threads):
-            t = threading.Thread(target = matrixProd, args = (_i,))
+            t = threading.Thread(target = matrixProd, args = (_i, part_num))
             threads.append(t)
             t.start()
         for thread in threads:
@@ -186,7 +191,7 @@ class Federated:
         time3 = time.time()
         #self.random_gradient_sum += torch.randn(3 * self.len_gradient_after_padding).cuda() * 0.0001
         #print("client ",  client_no, " masking complete",)
-        print("time for masking", time3 - time2)
+        #print("time for masking", time3 - time2)
     def recoverGradient(self):
         time1 = time.time()
         res = torch.zeros(self.len_gradient_after_padding, 1).cuda()
@@ -195,17 +200,16 @@ class Federated:
         for i in range(0, self.len_gradient_after_padding * 3 , 3 * self.matrix_size):
             ###TODO: time issue
             tmp = torch.mm(self.u_sigma, self.random_gradient_sum[i : i + 3 * self.matrix_size].view(-1,1))
-            for j in range(self.matrix_size): 
-                alpha[j] = tmp[self.S_j[j]]
+            alpha = torch.mm(self.trans_j, tmp)
             res[int(i/3) : int(i/3) + self.matrix_size, :] = torch.mm(self.A_inv, alpha)
         # set the gradient manually and update
         recovered_grad_in_cuda = transCudaArrayWithShapeList(res, self.shape_list)
         #print('[dist]\t', torch.dist(res[:self.len_gradient], self.ori_gradient_sum))
         time2 = time.time()
-        print('[dist]\t', torch.sum(torch.abs(res[:self.len_gradient, 0] - self.ori_gradient_sum)))
+        #print('[dist]\t', torch.sum(torch.abs(res[:self.len_gradient, 0] - self.ori_gradient_sum)))
         #self.ori_gradient_sum.fill_(0)
         #self.random_gradient_sum.fill_(0)
-        print('ori ', self.ori_gradient_sum.view(-1, 1)[:10])
-        print("rec ", recovered_grad_in_cuda[0].view(-1,1)[:10])
-        print("recover time cost ", time2 - time1)
+       # print('ori ', self.ori_gradient_sum.view(-1, 1)[:10])
+        #print("rec ", recovered_grad_in_cuda[0].view(-1,1)[:10])
+        #print("recover time cost ", time2 - time1)
         return recovered_grad_in_cuda

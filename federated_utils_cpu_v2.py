@@ -178,7 +178,6 @@ class Federated:
                     = np.dot(self.vh, flatterned_grad_extended_after_random[3 * i : 3*(i + self.matrix_size), :] + kernel_space)
             #print(thread_id, " finish")
         threads = []
-        part_num = self.len_gradient_after_padding / self.num_threads
         for _i in range(self.num_threads):
             t = threading.Thread(target = matrixProd, args = (_i, part_num))
             threads.append(t)

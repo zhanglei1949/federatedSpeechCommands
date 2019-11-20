@@ -153,7 +153,7 @@ def main():
 
         #compute for each client
         current_client = 0
-        pbar = tqdm(train_dataloader, unit="audios", unit_scale=train_dataloader.batch_size, disable=True)
+        pbar = tqdm(train_dataloader, unit="audios", unit_scale=train_dataloader.batch_size, disable=False)
         for batch in pbar:
             inputs = batch['input']
             inputs = torch.unsqueeze(inputs, 1)
@@ -186,27 +186,27 @@ def main():
                     current_client_grad = torch.cat((current_client_grad, param.grad.view(-1,1)), 0)
             #break
             current_client_grad = current_client_grad[1:,:].view(-1,)
-            print(current_client_grad.shape)
+            #print(current_client_grad.shape)
             #print("ori ", current_client_grad[0].view(-1, 1)[-10:])
             #print(len(current_client_grad), current_client_grad[0].shape, current_client_grad[-1].shape)
             #randomize the gradient, if in a new batch, generate the randomization matrix
             if (current_client == 0):
                 federated.init(current_client_grad, shape_list)
-            print("client ", current_client, " start")
+            #print("client ", current_client, " start")
             federated.work_for_client(current_client, current_client_grad)
-            print("client", current_client, " complete")
+            #print("client", current_client, " complete")
             if (current_client == args.clients - 1):
                 recovered_grad = federated.recoverGradient()
                 ind = 0
                 #print(recovered_grad_in_cuda, recovered_grad_in_cuda[0].shape, r)
                 for name, param in model.named_parameters():
                     if param.requires_grad:
-                        print(param.grad, recovered_grad[ind])
+                        #print(param.grad, recovered_grad[ind])
                         param.grad = recovered_grad[ind]
                         ind+=1
                 assert(ind == len(recovered_grad))
                 optimizer.step()
-                print("all clients finished")
+                #print("all clients finished")
                 current_client = 0
             else :
                 current_client += 1
@@ -233,8 +233,8 @@ def main():
                 'acc': "%.02f%%" % (100*float(correct)/total)
             })
             
-            print("[batch]\t", it, " [loss]\t ", running_loss / it, " [acc] \t", 100 * float(correct)/total)
-            print('------------------------------------------------------------------')
+            #print("[batch]\t", it, " [loss]\t ", running_loss / it, " [acc] \t", 100 * float(correct)/total)
+            #print('------------------------------------------------------------------')
             #break
 
         accuracy = float(correct)/total
