@@ -76,18 +76,26 @@ def build_dataset(n_mels = n_mels, train_dataset = args.train_dataset, valid_dat
                                          valid_feature_transform]))
     return train_dataset, valid_dataset
 
-class MyThread:
+class MyThread(Thread):
     def __init__(self, func, args):
         super(MyThread, self).__init__()
         self.func = func
         self.args = args
     def run(self):
-        self.result = self.func(*self.args)
+        self.result, self.loss, self.correct, self.total,self.shape_list = self.func(self.args)
     def get_results(self):
         try:
             return self.result
         except Exception:
             return None
+    def get_loss(self):
+        return self.loss
+    def get_correct(self):
+        return self.correct
+    def get_total(self):
+        return self.total
+    def get_shape_list(self):
+        return self.shape_list
 def main():
     # 1. load dataset, train and valid
     train_dataset, valid_dataset = build_dataset(n_mels = n_mels, train_dataset = args.train_dataset, valid_dataset = args.valid_dataset, background_noise = args.background_noise)
@@ -167,7 +175,7 @@ def main():
         pbar = tqdm(train_dataloader, unit="audios", unit_scale=train_dataloader.batch_size, disable=False)
         #print(pbar.total, len(train_dataloader), len(train_dataset), train_dataloader.batch_size, len(train_dataset)/train_dataloader.batch_size)
         pbar_iter = iter(pbar)
-        
+        num_iterations = int(pbar.total / args.clients)
         def getGradient(batch):
             inputs = batch['input']
             inputs = torch.unsqueeze(inputs, 1)
@@ -189,6 +197,14 @@ def main():
                 loss = criterion(outputs, targets)
             optimizer.zero_grad()
             loss.backward()
+            this_loss = loss.item()
+            
+            pred = outputs.data.max(1, keepdim=True)[1]
+            if args.mixup:
+                targets = batch['target']
+                targets = Variable(targets, requires_grad=False).cuda(async=True)
+            this_correct = pred.eq(targets.data.view_as(pred)).sum()
+            this_total = targets.size(0)
             current_client_grad = torch.zeros(1,1).cuda()
             shape_list = []
             for name, param in model.named_parameters():
@@ -199,50 +215,61 @@ def main():
                     current_client_grad = torch.cat((current_client_grad, param.grad.view(-1,1)), 0)
             #break
             current_client_grad = current_client_grad[1:,:].view(-1,)
-            return current_client_grad
-        for i in range(pbar.total / args.clients):
+            return current_client_grad, this_loss, this_correct, this_total, shape_list
+        for i in range(num_iterations):
             threads = []
+            #time1 = time.time()
             for j in range(args.clients):
                 t = MyThread(getGradient, next(pbar_iter))
                 threads.append(t)
                 t.start()
             for t in threads:
                 t.join()
+            #time2 = time.time()
+            #update statics 
+            it += args.clients
+            global_step += args.clients
             #First initialzie
-            federated.init(threads[0].get_results())
+            federated.init(threads[0].get_results(), t.get_shape_list())
             for i,t in enumerate(threads):
-                federated.work_for_client(i,t.get_results())
+                running_loss += t.get_loss()
+                correct += t.get_correct()
+                total += t.get_total()
 
-        
-'''
-        for batch in pbar:
+                federated.work_for_client(i, t.get_results())
+            # Recover the gradient
+            recovered_grad = federated.recoverGradient()
+            ind = 0
+            for name, param in model.named_parameters():
+                if param.requires_grad:
+                    param.grad = recovered_grad[ind]
+                    ind+=1
+            assert(ind == len(recovered_grad))
+            optimizer.step()
+            pbar.set_postfix({
+                'loss': "%.05f" % (running_loss / it),
+                'acc': "%.02f%%" % (100*float(correct)/total)
+            })
+        accuracy = float(correct)/total
+        epoch_loss = running_loss / it
+        writer.add_scalar('%s/accuracy' % phase, 100*accuracy, epoch)
+        writer.add_scalar('%s/epoch_loss' % phase, epoch_loss, epoch)
+        if (accuracy > best_accuracy):
+            best_accuracy = accuracy
+            checkpoint = {
+                'epoch': epoch,
+                'step': global_step,
+                'state_dict': model.state_dict(),
+                'loss': epoch_loss,
+                'accuracy': accuracy,
+                'optimizer' : optimizer.state_dict(),
+            }
+            torch.save(checkpoint, 'checkpoints/federated-best-loss-speech-commands-checkpoint-%s.pth' % full_name)
+            torch.save(model, '%d-%s-federated-best-loss.pth' % (start_timestamp, full_name))
+            del checkpoint
             
-            #print(current_client_grad.shape)
-            if (current_client == 0):
-                federated.init(current_client_grad,shape_list)
-            #print("client ", current_client, " start")
-            start_time = time.time()
-            federated.work_for_client(current_client, current_client_grad)
-            #print("client", current_client, " complete")
-            end_time = time.time()
-            #print("work for client ", current_client, " cost ", end_time - start_time)
-            if (current_client == args.clients - 1):
-                recover_start = time.time()
-                recovered_grad = federated.recoverGradient()
-                ind = 0
-                recover_end = time.time()
-                #print("recover gradient cost ", recover_end - recover_start)
-                #print(recovered_grad_in_cuda, recovered_grad_in_cuda[0].shape, r)
-                for name, param in model.named_parameters():
-                    if param.requires_grad:
-                        param.grad = recovered_grad[ind]
-                        ind+=1
-                assert(ind == len(recovered_grad))
-                optimizer.step()
-                #print("all clients finished")
-                current_client = 0
-            else :
-                current_client += 1
+'''
+
 
             # only update the parameters when current_client == args.clients - 1
 
