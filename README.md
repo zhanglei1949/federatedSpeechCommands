@@ -7,6 +7,9 @@ Run `federated_train_speech_commands_gpu.py` for simulating federated training w
 ```
 python federated_train_speech_commands.py --model=vgg11 --optim=sgd --lr-scheduler=plateau --learning-rate=0.01 --lr-scheduler-patience=5 --max-epochs=1 --batch-size=156 --clients=2 --matrix-size=500
 ```
+```
+CUDA_VISIBLE_DEVICES=0,1 python federated_train_speech_commands_cpu_v5_collect_gradient.py --model=conv --optim=sgd --lr-scheduler=plateau --learning-rate=0.01 --lr-scheduler-patience=5 --max-epochs=1 --batch-size=128 --clients=3 --matrix-size=100  --num-threads=10
+```
 
 
 # General
