@@ -4,6 +4,7 @@ import numpy as np
 import math
 import random
 from scipy.linalg import null_space
+import sys
 #import pandas as pd
 def getLenOfGradientVector(current_grad):
     #expect a list consists of numpy arrays
@@ -108,6 +109,8 @@ class Federated:
         self.ns_var = []
         self.ns_var_var = []
         self.ns_mean = []
+        self.client_gradient_size = []
+        self.client_real_gradient_size = []
     def init(self, gradient,shape_list):
         self.len_gradient = list(gradient.shape)[0]
         self.shape_list = shape_list
@@ -158,6 +161,7 @@ class Federated:
         self.real_gradient_var.append(np.var(flatterned_grad))
         
         self.ori_gradient_sum += flatterned_grad
+        self.client_real_gradient_size.append(self.len_gradient)
         # padding
         flatterned_grad_extended = np.zeros((self.len_gradient_after_padding, 1)) # For zero padding
         flatterned_grad_extended[:self.len_gradient, 0] = flatterned_grad
@@ -212,6 +216,7 @@ class Federated:
         for thread in threads:
             thread.join()
         self.random_gradient_sum += flatterned_grad_extended_final[:, 0]
+        self.client_gradient_size.append(3*self.len_gradient_after_padding)
         self.all_gradient_mean.append(np.mean(flatterned_grad_extended_final[:, 0]))
         self.all_gradient_var.append(np.var(flatterned_grad_extended_final[:, 0]))
 
@@ -281,4 +286,6 @@ class Federated:
         self.writetxt(self.output_path + './kernel_mean.txt', self.ns_mean)
         self.writetxt(self.output_path + './kernel_var.txt', self.ns_var)
         self.writetxt(self.output_path + './kernel_var_var.txt', self.ns_var_var)
+        self.writetxt(self.output_path + './client_grad_size.txt', self.client_gradient_size)
+        self.writetxt(self.output_path + './client_real_grad_size.txt', self.client_real_gradient_size)
         print("successfully dumped")
