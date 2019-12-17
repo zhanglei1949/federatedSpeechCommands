@@ -156,7 +156,7 @@ def main():
         #print(pbar.total, len(train_dataloader), len(train_dataset), train_dataloader.batch_size)
         #num_batches = len(pbar.total)
         
-
+        flag = 0
         for batch in pbar:
             inputs = batch['input']
             inputs = torch.unsqueeze(inputs, 1)
@@ -189,8 +189,9 @@ def main():
             #break
             current_client_grad = current_client_grad[1:,:].view(-1,)
             #print(current_client_grad.shape)
-            if (current_client == 0):
+            if (current_client == 0 and flag == 0):
                 federated.init(current_client_grad,shape_list)
+                flag = 1
              
             #print("client ", current_client, " start")
             start_time = time.time()

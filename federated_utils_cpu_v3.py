@@ -106,9 +106,9 @@ class Federated:
         self.real_gradient_mean = []
         self.rand_gradient_var = []
         self.rand_gradient_mean = []
-        self.ns_var = []
-        self.ns_var_var = []
-        self.ns_mean = []
+        #self.ns_var = []
+        #self.ns_var_var = []
+        #self.ns_mean = []
         self.client_gradient_size = []
         self.client_real_gradient_size = []
     def init(self, gradient,shape_list):
@@ -116,42 +116,49 @@ class Federated:
         self.shape_list = shape_list
         self.len_gradient_after_padding = math.ceil(float(self.len_gradient) / (self.matrix_size * self.num_threads)) * self.matrix_size * self.num_threads
         #
+        self.num_matrix = int(self.len_gradient_after_padding / self.matrix_size )
+        self.A = []
+        self.A_inv = []
+        self.C = []
+        self.vh = []
+        self.u_sigma = []
+        self.ns = []
+        for i in range(self.num_matrix):
+            self.A.append(self.MAX * np.random.rand(self.matrix_size, self.matrix_size))
+            self.A_inv.append(np.linalg.inv(self.A[-1]))
+            B = np.random.rand(self.matrix_size, 3 * self.matrix_size) * self.MAX
+            for i in range(0, self.matrix_size):
+                B[:, self.S_i[i] : self.S_i[i]+1] = self.A[-1][:, i:i+1]
+            self.C.append(np.random.rand(2 * self.matrix_size, 3 * self.matrix_size) * self.MAX)
+            for i in range(0, self.matrix_size):
+                self.C[-1][self.S_j[i] : self.S_j[i] + 1, :] = B[i:i+1 , :]
         
-        self.A = self.MAX * np.random.rand(self.matrix_size, self.matrix_size)
-        self.A_inv = np.linalg.inv(self.A)
-        #self.B = np.zeros((self.matrix_size, 3 * self.matrix_size))
-        self.B = np.random.rand(self.matrix_size, 3 * self.matrix_size) * self.MAX
-        for i in range(0, self.matrix_size):
-            self.B[:, self.S_i[i] : self.S_i[i]+1] = self.A[:, i:i+1]
-        self.C = np.random.rand(2 * self.matrix_size, 3 * self.matrix_size) * self.MAX
-        for i in range(0, self.matrix_size):
-            self.C[self.S_j[i] : self.S_j[i] + 1, :] = self.B[i:i+1 , :]
-        
-        # SVD
-        self.u, self.s, self.vh = np.linalg.svd(self.C, full_matrices = True)
-        #self.vh_t = np.transpose(self.vh) numpy doesn't need transpose for reconstruction!
-        self.sigma = np.zeros((self.C.shape[0], self.C.shape[1]))
-        self.sigma[: self.s.shape[0], : self.s.shape[0]] = np.diag(self.s)
-        # null space
-        self.u_sigma = np.dot(self.u, self.sigma)
-        self.ns = null_space(self.C) # (3000, 1000) we use the first args.
-        self.ns_mean.append(np.mean(np.abs(self.ns)))
-        self.ns_var.append(np.mean(np.var(np.abs(self.ns), axis = 0)))
-        self.ns_var_var.append(np.var(np.var(np.abs(self.ns), axis = 0)))
+            # SVD
+            u, s, vh = np.linalg.svd(self.C[-1], full_matrices = True)
+            #self.vh_t = np.transpose(self.vh) numpy doesn't need transpose for reconstruction!
+            self.vh.append(vh)
+            sigma = np.zeros((self.C[-1].shape[0], self.C[-1].shape[1]))
+            sigma[: s.shape[0], : s.shape[0]] = np.diag(s)
+            # null space
+            self.u_sigma.append(np.dot(u, sigma))
+            self.ns.append(null_space(self.C[-1])) # (3000, 1000) we use the first args.
         self.trans_i = np.zeros((self.matrix_size, 3*self.matrix_size))
         self.trans_j = np.zeros((self.matrix_size, 2*self.matrix_size))
         for i,ind in  enumerate(self.S_i):
             self.trans_i[i][ind] = 1
         for i,ind in enumerate(self.S_j):
-            self.trans_j[i][ind] = 1
-        
-            
+            self.trans_j[i][ind] = 1     
+
+        #self.ns_mean.append(np.mean(np.abs(self.ns)))
+        #self.ns_var.append(np.mean(np.var(np.abs(self.ns), axis = 0)))
+        #self.ns_var_var.append(np.var(np.var(np.abs(self.ns), axis = 0)))
+         
         self.ori_gradient_sum = np.zeros((self.len_gradient))
         self.random_gradient_sum = np.zeros((self.len_gradient_after_padding * 3))
 #        print("Initialization complete")
     def work_for_client(self, client_no, gradient):
         #print("Work for", client_no)
-        part_num = self.len_gradient_after_padding / self.num_threads
+        part_num = self.len_gradient_after_padding / (self.num_threads * self.matrix_size)
         time1 = time.time()
         assert(client_no < self.num_clients)
         flatterned_grad = gradient.cpu().numpy()
@@ -167,14 +174,14 @@ class Federated:
         flatterned_grad_extended[:self.len_gradient, 0] = flatterned_grad
         kernel_space = np.zeros((3 * self.matrix_size, 1))
         random_numbers = self.MAX * np.random.rand(self.matrix_size, 1)
-
+        #TODO indepdent kernel space
         for i in range(self.matrix_size):
             kernel_space += random_numbers[i] * self.ns[:, i:i+1]
         
         flatterned_grad_extended_after_random = self.MAX * np.random.rand(3 * self.len_gradient_after_padding, 1)
         ## TODO construct a transformation matrix, replace the assignment with matrix production
         def randomizing_matrix(thread_id, part_num):
-            for i in range(int(thread_id * part_num), int((thread_id + 1) * part_num), self.matrix_size):
+            for i in range(int(thread_id * part_num * self.matrix_size), int((thread_id + 1) * part_num * self.matrix_size), self.matrix_size):
                 #if (thread_id == 0 and int(i/self.matrix_size) % 50 == 0):
                 #    print(thread_id, i/self.matrix_size, (int((thread_id + 1) * part_num)/self.matrix_size))
                 #for j in range(0, self.matrix_size):
@@ -204,9 +211,9 @@ class Federated:
                 flatterned_grad_extended_final[3 * i : 3*(i + self.matrix_size), :] = np.dot(np.transpose(self.vh), flatterned_grad_extended_after_random[3 * i : 3*(i + self.matrix_size), :] + kernel_space)
         '''
         def matrixProd(thread_id, part_num):
-            for i in range(int(thread_id * part_num), int((thread_id + 1) * part_num), self.matrix_size):
+            for i in range(int(thread_id * part_num * self.matrix_size), int((thread_id + 1) * part_num * self.matrix_size), self.matrix_size):
                 flatterned_grad_extended_final[3 * i : 3*(i + self.matrix_size), :] \
-                    = np.dot(self.vh, flatterned_grad_extended_after_random[3 * i : 3*(i + self.matrix_size), :] + kernel_space)
+                    = np.dot(self.vh[int(i / self.matrix_size)], flatterned_grad_extended_after_random[3 * i : 3*(i + self.matrix_size), :] + kernel_space)
             #print(thread_id, " finish")
         threads = []
         for _i in range(self.num_threads):
@@ -246,12 +253,12 @@ class Federated:
         alpha = np.zeros((self.matrix_size, 1))
         
         for i in range(0, self.len_gradient_after_padding * 3 , 3 * self.matrix_size):
-            tmp = np.dot(self.u_sigma, self.random_gradient_sum[i : i + 3 * self.matrix_size]) # (2n,1)
+            tmp = np.dot(self.u_sigma[int(i/(3*self.matrix_size))], self.random_gradient_sum[i : i + 3 * self.matrix_size]) # (2n,1)
             alpha = np.dot(self.trans_j, tmp)
             alpha = np.reshape(alpha, (self.matrix_size,1))
             #for j in range(self.matrix_size): 
             #    alpha[j] = tmp[self.S_j[j]]
-            res[int(i/3) : int(i/3) + self.matrix_size] = np.dot(self.A_inv, alpha)
+            res[int(i/3) : int(i/3) + self.matrix_size] = np.dot(self.A_inv[int(i/(3*self.matrix_size))], alpha)
         # set the gradient manually and update
         recovered_grad_in_list = trans2numpyArrayWithShapeList(res, self.shape_list)
         time2 = time.time()
@@ -283,9 +290,10 @@ class Federated:
         self.writetxt(self.output_path + './rand_gradient_var.txt', self.rand_gradient_var)
         self.writetxt(self.output_path + './real_gradient_mean.txt',self.real_gradient_mean)
         self.writetxt(self.output_path + './real_gradient_var.txt', self.real_gradient_var)
-        self.writetxt(self.output_path + './kernel_mean.txt', self.ns_mean)
-        self.writetxt(self.output_path + './kernel_var.txt', self.ns_var)
-        self.writetxt(self.output_path + './kernel_var_var.txt', self.ns_var_var)
+        #self.writetxt(self.output_path + './kernel_mean.txt', self.ns_mean)
+        #self.writetxt(self.output_path + './kernel_var.txt', self.ns_var)
+        #self.writetxt(self.output_path + './kernel_var_var.txt', self.ns_var_var)  
+        np.savetxt(self.output_path + './kernel_vector_0.txt', self.ns[0])
         self.writetxt(self.output_path + './client_grad_size.txt', self.client_gradient_size)
         self.writetxt(self.output_path + './client_real_grad_size.txt', self.client_real_gradient_size)
         print("successfully dumped")
