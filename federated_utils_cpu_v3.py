@@ -132,9 +132,9 @@ class Federated:
         # null space
         self.u_sigma = np.dot(self.u, self.sigma)
         self.ns = null_space(self.C) # (3000, 1000) we use the first args.
-        self.ns_mean.append(np.mean(self.ns))
-        self.ns_var.append(np.mean(np.var(self.ns, axis = 0)))
-        self.ns_var_var.append(np.var(np.var(self.ns, axis = 0)))
+        self.ns_mean.append(np.mean(np.abs(self.ns)))
+        self.ns_var.append(np.mean(np.var(np.abs(self.ns), axis = 0)))
+        self.ns_var_var.append(np.var(np.var(np.abs(self.ns), axis = 0)))
         self.trans_i = np.zeros((self.matrix_size, 3*self.matrix_size))
         self.trans_j = np.zeros((self.matrix_size, 2*self.matrix_size))
         for i,ind in  enumerate(self.S_i):
@@ -257,7 +257,8 @@ class Federated:
         return recovered_grad_in_list
     def writetxt(self, filename, l):
         f = open(filename, 'w')
-        f.write('\n'.join(l))
+        ll = [str(i)+'\n' for i in l]
+        f.writelines(ll)
         f.close()
     def dump(self):
         '''
@@ -272,7 +273,7 @@ class Federated:
         np.save(self.output_path + './kernel_var_var.npy', np.array(self.ns_var_var))
         ''' 
         self.writetxt(self.output_path + './all_gradient_mean.txt', self.all_gradient_mean)
-        self.writetxt(self.output_path + ' ./all_gradient_var.txt', self.all_gradient_var)
+        self.writetxt(self.output_path + './all_gradient_var.txt', self.all_gradient_var)
         self.writetxt(self.output_path + './rand_gradient_mean.txt', self.rand_gradient_mean)
         self.writetxt(self.output_path + './rand_gradient_var.txt', self.rand_gradient_var)
         self.writetxt(self.output_path + './real_gradient_mean.txt',self.real_gradient_mean)
