@@ -192,7 +192,8 @@ def main():
             if (current_client == 0 and flag == 0):
                 federated.init(current_client_grad,shape_list)
                 flag = 1
-             
+            if (current_client == 0):
+                federated.init_gradient_sums()
             #print("client ", current_client, " start")
             start_time = time.time()
             federated.work_for_client(current_client, current_client_grad)

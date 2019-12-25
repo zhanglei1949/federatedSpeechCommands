@@ -96,6 +96,7 @@ class Federated:
         self.S_j.sort()
         self.all_index = random.sample(range(0, 3 * self.matrix_size), 3 * self.matrix_size)
         self.rand_index = list(set(self.all_index) - set(self.S_i))
+        self.rand_index.sort()
         # dump indexing matrix
         np.save(self.output_path + 'S_i.npy', self.S_i)
         np.save(self.output_path + 'S_j.npy', self.S_j)
@@ -111,6 +112,7 @@ class Federated:
         #self.ns_mean = []
         self.client_gradient_size = []
         self.client_real_gradient_size = []
+        self.gradient_for_matrix_zero = 0
     def init(self, gradient,shape_list):
         self.len_gradient = list(gradient.shape)[0]
         self.shape_list = shape_list
@@ -148,11 +150,13 @@ class Federated:
             self.trans_i[i][ind] = 1
         for i,ind in enumerate(self.S_j):
             self.trans_j[i][ind] = 1     
-
+        self.trans_i_rand = np.zeros((2*self.matrix_size, 3*self.matrix_size))
+        for i,ind in enumerate(self.rand_index):
+            self.trans_i_rand[i][ind] = 1
         #self.ns_mean.append(np.mean(np.abs(self.ns)))
         #self.ns_var.append(np.mean(np.var(np.abs(self.ns), axis = 0)))
         #self.ns_var_var.append(np.var(np.var(np.abs(self.ns), axis = 0)))
-         
+    def init_gradient_sums(self):
         self.ori_gradient_sum = np.zeros((self.len_gradient))
         self.random_gradient_sum = np.zeros((self.len_gradient_after_padding * 3))
 #        print("Initialization complete")
@@ -164,19 +168,15 @@ class Federated:
         flatterned_grad = gradient.cpu().numpy()
         #flatterned_grad = transListOfArraysToArraysCpu(gradient, self.len_gradient)
         #call variance of real gradient
-        self.real_gradient_mean.append(np.mean(flatterned_grad))
-        self.real_gradient_var.append(np.var(flatterned_grad))
+#        self.real_gradient_mean.append(np.mean(flatterned_grad))
+#        self.real_gradient_var.append(np.var(flatterned_grad))
         
         self.ori_gradient_sum += flatterned_grad
         self.client_real_gradient_size.append(self.len_gradient)
         # padding
         flatterned_grad_extended = np.zeros((self.len_gradient_after_padding, 1)) # For zero padding
         flatterned_grad_extended[:self.len_gradient, 0] = flatterned_grad
-        kernel_space = np.zeros((3 * self.matrix_size, 1))
-        random_numbers = self.MAX * np.random.rand(self.matrix_size, 1)
-        #TODO indepdent kernel space
-        for i in range(self.matrix_size):
-            kernel_space += random_numbers[i] * self.ns[:, i:i+1]
+        
         
         flatterned_grad_extended_after_random = self.MAX * np.random.rand(3 * self.len_gradient_after_padding, 1)
         ## TODO construct a transformation matrix, replace the assignment with matrix production
@@ -212,8 +212,15 @@ class Federated:
         '''
         def matrixProd(thread_id, part_num):
             for i in range(int(thread_id * part_num * self.matrix_size), int((thread_id + 1) * part_num * self.matrix_size), self.matrix_size):
+                kernel_space = np.zeros((3 * self.matrix_size, 1))
+                random_numbers = self.MAX * np.random.rand(self.matrix_size, 1)
+                #TODO indepdent kernel space
+                for j in range(self.matrix_size):
+                    kernel_space += random_numbers[j] * self.ns[int(i/self.matrix_size)][:, j:j+1]
                 flatterned_grad_extended_final[3 * i : 3*(i + self.matrix_size), :] \
                     = np.dot(self.vh[int(i / self.matrix_size)], flatterned_grad_extended_after_random[3 * i : 3*(i + self.matrix_size), :] + kernel_space)
+                if (i == 0):
+                    self.gradient_for_matrix_zero = flatterned_grad_extended_final[3 * i : 3*(i + self.matrix_size), :]
             #print(thread_id, " finish")
         threads = []
         for _i in range(self.num_threads):
@@ -226,9 +233,30 @@ class Federated:
         self.client_gradient_size.append(3*self.len_gradient_after_padding)
         self.all_gradient_mean.append(np.mean(flatterned_grad_extended_final[:, 0]))
         self.all_gradient_var.append(np.var(flatterned_grad_extended_final[:, 0]))
-
+        
+        real_pos_arr = np.zeros((self.len_gradient_after_padding))
+        rand_pos_arr = np.zeros((2 * self.len_gradient_after_padding))
+        def obtain_real_rand_pos(thread_id, part_num):
+            for i in range(int(thread_id * self.matrix_size * part_num), int((thread_id+1) * self.matrix_size * part_num), self.matrix_size):
+                real_pos_arr[i : i + self.matrix_size] = np.dot(flatterned_grad_extended_final[3 * i : 3*(i+self.matrix_size), :].reshape(1, 3*self.matrix_size), self.trans_i.T).reshape(self.matrix_size,)
+                rand_pos_arr[2* i : 2 * i + 2*self.matrix_size] = np.dot(flatterned_grad_extended_final[3 * i : 3*(i+self.matrix_size), :].reshape(1, 3*self.matrix_size), self.trans_i_rand.T).reshape(2 * self.matrix_size,)
+#                print(np.sum(real_pos_arr[i : i + self.matrix_size]), np.sum(rand_pos_arr[i : i + 2*self.matrix_size]), np.sum(flatterned_grad_extended_final[3 * i : 3*(i+self.matrix_size), :]))
+                #(1*3n) (3n*n) = 1*n
+        threads = []
+        for _i in range(self.num_threads):
+            t = threading.Thread(target = obtain_real_rand_pos, args = (_i, part_num))
+            threads.append(t)
+            t.start()
+        for thread in threads:
+            thread.join()
+        self.rand_gradient_mean.append(np.mean(rand_pos_arr))
+        self.rand_gradient_var.append(np.var(rand_pos_arr))
+        self.real_gradient_mean.append(np.mean(real_pos_arr))
+        self.real_gradient_var.append(np.var(real_pos_arr))
+#        print(np.sum(real_pos_arr), np.sum(rand_pos_arr), np.sum(flatterned_grad_extended_final))
+#        print(2*self.len_gradient_after_padding*self.rand_gradient_mean[-1] + self.len_gradient_after_padding*self.real_gradient_mean[-1], 3*self.len_gradient_after_padding*self.all_gradient_mean[-1])
 #        self.rand_gradient_mean.append((flatterned_grad_extended_final[:,0].shape[0] * self.all_gradient_mean[-1] - flatterned_grad.shape[0] * self.real_gradient_mean[-1])/ ( flatterned_grad_extended_final[:,0].shape[0] -  flatterned_grad.shape[0]))
-        self.rand_gradient_mean.append((np.sum(flatterned_grad_extended_final) - np.sum(flatterned_grad))/( flatterned_grad_extended_final[:,0].shape[0] -  flatterned_grad.shape[0])) 
+#        self.rand_gradient_mean.append((np.sum(flatterned_grad_extended_final) - np.sum(flatterned_grad))/( flatterned_grad_extended_final[:,0].shape[0] -  flatterned_grad.shape[0])) 
         # calculating the average of randomized gradient
         #mean = 0
         #for i in range(0, 3 * self.len_gradient_after_padding, 3 * self.matrix_size):
@@ -238,15 +266,18 @@ class Federated:
         #mean = mean / ( 3 * self.len_gradient_after_padding - self.len_gradient)
         #print('random mean', mean, self.rand_gradient_mean[-1])
 #        print(3 * self.len_gradient_after_padding - self.len_gradient ,flatterned_grad_extended_final[:,0].shape[0] -  flatterned_grad.shape[0])
-        rand_gradient_var = 0
-        for i in range(0, 3 * self.len_gradient_after_padding, 3 * self.matrix_size):
-            for index in self.rand_index:
-                rand_gradient_var += (flatterned_grad_extended_final[index][0] - self.rand_gradient_mean[-1])**2
-        rand_gradient_var = rand_gradient_var / (3 * self.len_gradient_after_padding - self.len_gradient)
-        self.rand_gradient_var.append(rand_gradient_var)
+#        rand_gradient_var = 0
+#        for i in range(0, 3 * self.len_gradient_after_padding, 3 * self.matrix_size):
+#            for index in self.rand_index:
+#                rand_gradient_var += (flatterned_grad_extended_final[index][0] - self.rand_gradient_mean[-1])**2
+#        rand_gradient_var = rand_gradient_var / (3 * self.len_gradient_after_padding - self.len_gradient)
+#        self.rand_gradient_var.append(rand_gradient_var)
         #print(self.rand_gradient_var[-1], self.real_gradient_var[-1], self.all_gradient_var[-1])
         #print("client ",  client_no, " masking complete",)
         #print("time for randomization ", time2 - time1, "time for masking", time3 - time2)
+        
+        #obtain real gradient array
+#        real_grad_pos_arr = np.zeros((self.
     def recoverGradient(self):
         time1 = time.time()
         res = np.zeros((self.len_gradient_after_padding, 1))
@@ -294,6 +325,7 @@ class Federated:
         #self.writetxt(self.output_path + './kernel_var.txt', self.ns_var)
         #self.writetxt(self.output_path + './kernel_var_var.txt', self.ns_var_var)  
         np.savetxt(self.output_path + './kernel_vector_0.txt', self.ns[0])
+        np.savetxt(self.output_path + './gradient_for_matrix_0.txt', self.gradient_for_matrix_zero)
         self.writetxt(self.output_path + './client_grad_size.txt', self.client_gradient_size)
         self.writetxt(self.output_path + './client_real_grad_size.txt', self.client_real_gradient_size)
         print("successfully dumped")
