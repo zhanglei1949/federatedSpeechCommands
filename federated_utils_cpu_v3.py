@@ -113,7 +113,12 @@ class Federated:
         self.client_gradient_size = []
         self.client_real_gradient_size = []
         self.gradient_for_matrix_zero = 0
+        self.client_time_elapsed = [[] for i in range(self.num_clients + 2)]
+        self.init_time = 0
+        self.server_time = 0
+        # 1 initialization + 1 server + n client encrp + n client decrp 
     def init(self, gradient,shape_list):
+        time1 = time.time()
         self.len_gradient = list(gradient.shape)[0]
         self.shape_list = shape_list
         self.len_gradient_after_padding = math.ceil(float(self.len_gradient) / (self.matrix_size * self.num_threads)) * self.matrix_size * self.num_threads
@@ -144,6 +149,8 @@ class Federated:
             # null space
             self.u_sigma.append(np.dot(u, sigma))
             self.ns.append(null_space(self.C[-1])) # (3000, 1000) we use the first args.
+        time2 = time.time()
+        self.init_time = time2-time1
         self.trans_i = np.zeros((self.matrix_size, 3*self.matrix_size))
         self.trans_j = np.zeros((self.matrix_size, 2*self.matrix_size))
         for i,ind in  enumerate(self.S_i):
@@ -160,10 +167,11 @@ class Federated:
         self.ori_gradient_sum = np.zeros((self.len_gradient))
         self.random_gradient_sum = np.zeros((self.len_gradient_after_padding * 3))
 #        print("Initialization complete")
+        
     def work_for_client(self, client_no, gradient):
         #print("Work for", client_no)
+        time1 = time.time() #### start time
         part_num = self.len_gradient_after_padding / (self.num_threads * self.matrix_size)
-        time1 = time.time()
         assert(client_no < self.num_clients)
         flatterned_grad = gradient.cpu().numpy()
         #flatterned_grad = transListOfArraysToArraysCpu(gradient, self.len_gradient)
@@ -201,7 +209,6 @@ class Federated:
         #         flatterned_grad_extended_after_random[i * 3 + self.S_i[j]] = flatterned_grad_extended[i + j]
         
         # compute result
-        time2 = time.time()
         #print("client ", client_no, " randomization complete")
         flatterned_grad_extended_final = self.MAX * np.random.rand(3 * self.len_gradient_after_padding, 1)
         ##TODO: optimize matrix calculation
@@ -229,7 +236,12 @@ class Federated:
             t.start()
         for thread in threads:
             thread.join()
+        time2 = time.time() ### time end
+        self.client_time_elapsed[client_no].append(time2-time1)
+        time3 = time.time()
         self.random_gradient_sum += flatterned_grad_extended_final[:, 0]
+        time4 = time.time()
+        self.server_time += time4 - time3
         self.client_gradient_size.append(3*self.len_gradient_after_padding)
         self.all_gradient_mean.append(np.mean(flatterned_grad_extended_final[:, 0]))
         self.all_gradient_var.append(np.var(flatterned_grad_extended_final[:, 0]))
@@ -293,6 +305,9 @@ class Federated:
         # set the gradient manually and update
         recovered_grad_in_list = trans2numpyArrayWithShapeList(res, self.shape_list)
         time2 = time.time()
+        self.client_time_elapsed[self.num_clients].append(time2 - time1)
+        self.client_time_elapsed[self.num_clients+1].append(self.server_time)
+        self.server_time = 0
         #print('[dist]\t', np.sum(np.abs(res[:self.len_gradient, 0] - self.ori_gradient_sum)))
         #print('ori ', self.ori_gradient_sum[:10])
         #print("rec ", res[:10])
@@ -303,6 +318,14 @@ class Federated:
         ll = [str(i)+'\n' for i in l]
         f.writelines(ll)
         f.close()
+    def write_timetxt(self, filename, l):
+        f = open(filename, 'w')
+        assert(len(l) == self.num_clients + 2)
+        print(len(l[0]), len(l[1]), len(l[2]), len(l[3]))
+        for i in range(len(l[-1])):
+            for j in range(self.num_clients + 2):
+                f.write(str(l[j][i]) + '\t')
+            f.write('\n')
     def dump(self):
         '''
         np.save(self.output_path + './all_gradient_mean.npy', np.array(self.all_gradient_mean))
@@ -328,4 +351,8 @@ class Federated:
         np.savetxt(self.output_path + './gradient_for_matrix_0.txt', self.gradient_for_matrix_zero)
         self.writetxt(self.output_path + './client_grad_size.txt', self.client_gradient_size)
         self.writetxt(self.output_path + './client_real_grad_size.txt', self.client_real_gradient_size)
+        self.write_timetxt(self.output_path + './time_elapsed.txt', self.client_time_elapsed)
+        f = open(self.output_path + './time_init.txt', 'w')
+        f.write(str(self.init_time) + '\n')
+        f.close()
         print("successfully dumped")
