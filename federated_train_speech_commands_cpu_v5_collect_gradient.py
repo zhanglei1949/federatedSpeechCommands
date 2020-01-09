@@ -45,6 +45,9 @@ parser.add_argument("--resume", type=str, help='checkpoint file to resume')
 parser.add_argument("--model", choices=models.available_models, default=models.available_models[0], help='model of NN')
 parser.add_argument("--input", choices=['mel32'], default='mel32', help='input of NN')
 parser.add_argument('--mixup', action='store_true', help='use mixup')
+parser.add_argument('--precision_file', type=str, default = './analysis/precision_fed.txt', help='path to save precision')
+parser.add_argument('--recall_file', type=str, default = './analysis/recall_fed.txt', help='path to save recall')
+parser.add_argument('--accuracy_file', type=str, default = './analysis/accuracy_fed.txt', help='path to save accuracy')
 args = parser.parse_args()
 
 use_gpu = torch.cuda.is_available()
@@ -137,6 +140,9 @@ def main():
     since = time.time()
     #grad_client_list = [[]] * args.clients
     federated = Federated(args.clients, args.matrix_size, args.num_threads, args.gradient_res_path)
+    p_file = open(args.precision_file, 'w')
+    r_file = open(args.recall_file, 'w')
+    a_file = open(args.accuracy_file, 'w')
     for epoch in range(start_epoch, args.max_epochs):
         print("epoch %3d with lr=%.02e" % (epoch, get_lr()))
         phase = 'train'
@@ -230,10 +236,38 @@ def main():
                 targets = batch['target']
                 targets = Variable(targets, requires_grad=False).cuda(async=True)
             correct += pred.eq(targets.data.view_as(pred)).sum()
+            num_labels = 12
+            # cal batch statics
+            tp = [0] * num_labels
+            tn = [0] * num_labels
+            fp = [0] * num_labels
+            fn = [0] * num_labels
+            p = [-1] * num_labels
+            r = [-1] * num_labels
+            for i in range(num_labels):
+                tp[i] = ( (targets.data.view_as(pred) == i) & (pred == i)).cpu().numpy().sum()
+                tn[i] = ( (targets.data.view_as(pred) != i) & (pred != i)).cpu().numpy().sum()
+                fp[i] = ( (targets.data.view_as(pred) != i) & (pred == i)).cpu().numpy().sum()
+                fn[i] = ( (targets.data.view_as(pred) == i) & (pred != i)).cpu().numpy().sum()
+            for i in range(num_labels):
+                if (tp[i] + fp[i] > 0):
+                    p[i] = float(tp[i])/(tp[i] + fp[i])
+                if (tp[i] + fn[i] > 0):
+                    r[i] = float(tp[i])/(tp[i] + fn[i])
+            acc = float(sum(tp))/ (tp[0] + tn[0] + fp[0] + fn[0])
+            for i in range(num_labels):
+                p_file.write(str(p[i]) + '\t')
+                r_file.write(str(r[i]) + '\t')
+            p_file.write('\n')
+            r_file.write('\n')
+            a_file.write(str(acc) + '\n')
+            #print(tp)
             total += targets.size(0)
-
+            #print(p)
+            #print(r)
+            #print(targets.size(0), (tp[0] + tn[0] + fp[0] + fn[0]))
+            #assert(targets.size(0) == (tp[0] + tn[0] + fp[0] + fn[0]))
             writer.add_scalar('%s/loss' % phase, loss.item(), global_step)
-
             # update the progress bar
             pbar.set_postfix({
                 'loss': "%.05f" % (running_loss / it),
@@ -249,6 +283,9 @@ def main():
         epoch_loss = running_loss / it
         writer.add_scalar('%s/accuracy' % phase, 100*accuracy, epoch)
         writer.add_scalar('%s/epoch_loss' % phase, epoch_loss, epoch)
+    p_file.close()
+    r_file.close()
+    a_file.close()
     if args.lr_scheduler == 'plateau':
         lr_scheduler.step(epoch_loss)
         if (accuracy > best_accuracy):
